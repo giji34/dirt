@@ -1,0 +1,3 @@
+[submodule "ext/hwm.task"]
+	path = ext/hwm.task
+	url = https://github.com/hotwatermorning/hwm.task.git

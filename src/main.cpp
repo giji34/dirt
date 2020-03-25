@@ -3,20 +3,32 @@
 #include <iostream>
 #include <vector>
 #include <sstream>
+#include <thread>
+#include <set>
+#include <list>
+#include "hwm/task/task_queue.hpp"
 
 using namespace std;
 
+constexpr bool IsSignedRightShiftIsArithmetic() {
+    return -1 >> 1 == -1;
+}
+
 static int64_t ArithmeticRightShift(int64_t v, uint32_t amount) {
-    if (v >= 0) {
+    if constexpr (IsSignedRightShiftIsArithmetic()) {
         return v >> amount;
     } else {
-        int64_t t = v;
-        uint64_t u = *(uint64_t *)&t;
-        u = 0x7FFFFFFFFFFFFFFFUL & u;
-        u = u >> amount;
-        uint64_t mask = (0xFFFFFFFFFFFFFFFFUL >> (63 - amount)) << (63 - amount);
-        u = u | mask;
-        return *(int64_t *)&u;
+        if (v >= 0) {
+            return v >> amount;
+        } else {
+            int64_t t = v;
+            uint64_t u = *(uint64_t *)&t;
+            u = 0x7FFFFFFFFFFFFFFFUL & u;
+            u = u >> amount;
+            uint64_t mask = (0xFFFFFFFFFFFFFFFFUL >> (63 - amount)) << (63 - amount);
+            u = u | mask;
+            return *(int64_t *)&u;
+        }
     }
 }
 
@@ -137,6 +149,69 @@ static int DirtRotation(int x, int y, int z) {
     return GetRandomItemIndex(numFacingTypes, weight);
 }
 
+static bool SatisfiesPredicates(int x, int y, int z, int direction, int const* predicate, size_t predicateSize) {
+    int bx = x;
+    int by = y;
+    int bz = z;
+    for (int i = 0; i < predicateSize; i++) {
+        int expected = predicate[i];
+        int actual = DirtRotation(bx, by, bz);
+        if (expected != actual) {
+            return false;
+        }
+        if (direction == DIRECTION_X) {
+            bx++;
+        } else if (direction == DIRECTION_Y) {
+            by++;
+        } else if (direction == DIRECTION_Z) {
+            bz++;
+        }
+    }
+    return true;
+}
+
+static mutex coutMutex;
+using u128 = __uint128_t;
+
+template<class T>
+T IndexFromCoord3(T a, T b, T c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
+    T const dA = maxA - minA + 1;
+    T const dB = maxB - minB + 1;
+    T const dC = maxC - minC + 1;
+    return a * dB * dC + b * dC + c;
+}
+
+template<class T>
+void CoordFromIndex3(T idx, T *a, T *b, T *c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
+    T const dB = maxB - minB + 1;
+    T const dC = maxC - minC + 1;
+    T const r = idx % (dB * dC);
+    T const ta = (idx - r) / (dB * dC);
+    T const tc = r % dC;
+    T const tb = (r - tc) / dC;
+    *a = ta + minA;
+    *b = tb + minB;
+    *c = tc + minC;
+}
+
+static void ExecuteTask(int direction, u128 begin, u128 end, int const* predicates, size_t numPredicates, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+    u128 idx = begin;
+    u128 x0, y0, z0;
+    CoordFromIndex3<u128>(idx, &y0, &z0, &x0, minY, maxY, minZ, maxZ, minX, maxX);
+    for (int y = y0; y <= maxY && idx < end ; y++) {
+        for (int z = z0; z <= maxZ && idx < end; z++) {
+            for (int x = x0; x <= maxX && idx < end; x++, idx++) {
+                if (SatisfiesPredicates(x, y, z, direction, predicates, numPredicates)) {
+                    lock_guard<mutex> l(coutMutex);
+                    cout << "[" << x << ", " << y << ", " << z << "]" << endl;
+                }
+            }
+            x0 = minX;
+        }
+        z0 = minZ;
+    }
+}
+
 int main(int argc, char *argv[]) {
     int opt;
     int minX = INT_MAX;
@@ -239,32 +314,17 @@ int main(int argc, char *argv[]) {
             predicate[i] = (predicate[i] + offset) % 4;
         }
     }
-    for (int y = minY; y <= maxY; y++) {
-        for (int z = minZ; z <= maxZ; z++) {
-            for (int x = minX; x <= maxX; x++) {
-                bool ok = true;
-                int bx = x;
-                int by = y;
-                int bz = z;
-                for (int i = 0; i < predicate.size(); i++) {
-                    int expected = predicate[i];
-                    int actual = DirtRotation(bx, by, bz);
-                    if (expected != actual) {
-                        ok = false;
-                        break;
-                    }
-                    if (direction == DIRECTION_X) {
-                        bx++;
-                    } else if (direction == DIRECTION_Y) {
-                        by++;
-                    } else if (direction == DIRECTION_Z) {
-                        bz++;
-                    }
-                }
-                if (ok) {
-                    cout << "[" << x << ", " << y << ", " << z << "]" << endl;
-                }
-            }
-        }
+    u128 const volume = u128(maxX - minX + 1) * u128(maxY - minY + 1) * u128(maxZ - minZ + 1);
+    unsigned int const concurrency = thread::hardware_concurrency();
+    size_t volumePerTask = volume / concurrency;
+    list<future<void>> futures;
+    hwm::task_queue tq(concurrency);
+    for (unsigned int i = 0; i < concurrency; i++) {
+        u128 const begin = i * volumePerTask;
+        u128 const end = i == concurrency - 1 ? volume : begin + volumePerTask;
+        futures.emplace_back(tq.enqueue(ExecuteTask, direction, begin, end, predicate.data(), predicate.size(), minX, maxX, minY, maxY, minZ, maxZ));
+    }
+    for (auto& f : futures) {
+        f.get();
     }
 }
