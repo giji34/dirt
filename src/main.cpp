@@ -10,12 +10,12 @@
 
 using namespace std;
 
-constexpr bool IsSignedRightShiftIsArithmetic() {
+constexpr bool IsSignedRightShiftArithmetic() {
     return -1 >> 1 == -1;
 }
 
 static int64_t ArithmeticRightShift(int64_t v, uint32_t amount) {
-    if constexpr (IsSignedRightShiftIsArithmetic()) {
+    if constexpr (IsSignedRightShiftArithmetic()) {
         return v >> amount;
     } else {
         if (v >= 0) {
@@ -174,7 +174,7 @@ static mutex coutMutex;
 using u128 = __uint128_t;
 
 template<class T>
-T IndexFromCoord3(T a, T b, T c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
+static T IndexFromCoord3(T a, T b, T c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
     T const dA = maxA - minA + 1;
     T const dB = maxB - minB + 1;
     T const dC = maxC - minC + 1;
@@ -182,7 +182,7 @@ T IndexFromCoord3(T a, T b, T c, T minA, T maxA, T minB, T maxB, T minC, T maxC)
 }
 
 template<class T>
-void CoordFromIndex3(T idx, T *a, T *b, T *c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
+static void CoordFromIndex3(T idx, T *a, T *b, T *c, T minA, T maxA, T minB, T maxB, T minC, T maxC) {
     T const dB = maxB - minB + 1;
     T const dC = maxC - minC + 1;
     T const r = idx % (dB * dC);
@@ -229,6 +229,10 @@ int main(int argc, char *argv[]) {
                 string d = optarg;
                 if (d == "y") {
                     direction = DIRECTION_Y;
+                } else if (d == "x") {
+                    direction = DIRECTION_X;
+                } else if (d == "z") {
+                    direction = DIRECTION_Z;
                 } else {
                     PrintHelpAndExit("unsupported direction");
                 }
