@@ -115,17 +115,84 @@ static void PrintHelpAndExit(string const& msg = "") {
     exit(1);
 }
 
-static vector<string> Split(string const&s, char delim) {
-    vector<string> elems;
-    stringstream ss(s);
-    string item;
-    while (getline(ss, item, delim)) {
-        if (!item.empty()) {
-            elems.push_back(item);
+class strings {
+    strings() = delete;
+
+public:
+    static vector<string> Split(string const&s, char delim) {
+        vector<string> elems;
+        stringstream ss(s);
+        string item;
+        while (getline(ss, item, delim)) {
+            if (!item.empty()) {
+                elems.push_back(item);
+            }
         }
+        return elems;
     }
-    return elems;
-}
+
+    static bool StartsWith(string const &s, string const &search) {
+        if (s.size() < search.size()) {
+            return false;
+        }
+        if (search.empty()) {
+            return false;
+        }
+        auto idx = s.find(search);
+        if (idx == string::npos) {
+            return false;
+        }
+        return idx == 0;
+    }
+    
+    static bool EndsWith(string const &s, string const &search) {
+        if (s.size() < search.size()) {
+            return false;
+        }
+        if (search.empty()) {
+            return false;
+        }
+        auto idx = s.rfind(search);
+        if (idx == string::npos) {
+            return false;
+        }
+        return idx + search.size() == s.size();
+    }
+    
+    static string LTrim(string const &s, string const &left) {
+        if (left.empty()) {
+            return s;
+        }
+        string ret = s;
+        while (StartsWith(ret, left)) {
+            ret = ret.substr(left.size());
+        }
+        return ret;
+    }
+    
+    static string RTrim(string const &s, string const &right) {
+        if (right.empty()) {
+            return s;
+        }
+        string ret = s;
+        while (EndsWith(ret, right)) {
+            ret = ret.substr(0, ret.size() - right.size());
+        }
+        return ret;
+    }
+    
+    static string Trim(string const& s, string delim = " ") {
+        return LTrim(RTrim(s, delim), delim);
+    }
+    
+    static int ToInt(string const& s) {
+        int v = -1;
+        if (sscanf(s.c_str(), "%d", &v) != 1) {
+            throw runtime_error("invlaid integer string: " + s);
+        }
+        return v;
+    }
+};
 
 enum Direction {
     DIRECTION_X = 1,
@@ -149,22 +216,73 @@ static int DirtRotation(int x, int y, int z) {
     return GetRandomItemIndex(numFacingTypes, weight);
 }
 
-static bool SatisfiesPredicates(int x, int y, int z, int direction, int const* predicate, size_t predicateSize) {
-    int bx = x;
-    int by = y;
-    int bz = z;
-    for (int i = 0; i < predicateSize; i++) {
-        int expected = predicate[i];
-        int actual = DirtRotation(bx, by, bz);
-        if (expected != actual) {
-            return false;
+struct Predicate {
+    int dx;
+    int dy;
+    int dz;
+    int rotation;
+
+    /**
+        {
+            dx: 0,
+            dy: 0,
+            dz: 0,
+            r: 0
         }
-        if (direction == DIRECTION_X) {
-            bx++;
-        } else if (direction == DIRECTION_Y) {
-            by++;
-        } else if (direction == DIRECTION_Z) {
-            bz++;
+     */
+    static Predicate FromJSON(string const& s) {
+        string t = strings::LTrim(strings::RTrim(s, " "), " ");
+        if (!strings::StartsWith(t, "{")) {
+            throw runtime_error("invalid json: " + s);
+        }
+        if (!strings::EndsWith(t, "}")) {
+            throw runtime_error("invalid json: " + s);
+        }
+        vector<string> tokens = strings::Split(t.substr(1, t.size() - 2), ',');
+        optional<int> dx;
+        optional<int> dy;
+        optional<int> dz;
+        optional<int> r;
+        for (auto const& token : tokens) {
+            vector<string> pp = strings::Split(strings::Trim(token), ':');
+            if (pp.size() != 2) {
+                throw runtime_error("invalid json: " + token);
+            }
+            auto key = strings::Trim(pp[0]);
+            auto value = strings::Trim(pp[1]);
+            if (key == "dx") {
+                dx = strings::ToInt(value);
+            } else if (key == "dy") {
+                dy = strings::ToInt(value);
+            } else if (key == "dz") {
+                dz = strings::ToInt(value);
+            } else if (key == "r") {
+                r = strings::ToInt(value);
+            } else {
+                throw runtime_error("unknown key for Predicate: key=" + key);
+            }
+        }
+        if (!dx || !dy || !dz || !r) {
+            throw runtime_error("incomplete json value: " + s);
+        }
+        Predicate p;
+        p.dx = *dx;
+        p.dy = *dy;
+        p.dz = *dz;
+        p.rotation = *r;
+        return p;
+    }
+};
+
+static bool SatisfiesPredicates(int x, int y, int z, Predicate const* predicate, size_t predicateSize) {
+    for (int i = 0; i < predicateSize; i++) {
+        Predicate p = predicate[i];
+        int bx = x + p.dx;
+        int by = y + p.dy;
+        int bz = z + p.dz;
+        int actual = DirtRotation(bx, by, bz);
+        if (p.rotation != actual) {
+            return false;
         }
     }
     return true;
@@ -194,14 +312,14 @@ static void CoordFromIndex3(T idx, T *a, T *b, T *c, T minA, T maxA, T minB, T m
     *c = tc + minC;
 }
 
-static void ExecuteTask(int direction, u128 begin, u128 end, int const* predicates, size_t numPredicates, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
+static void ExecuteTask(int direction, u128 begin, u128 end, Predicate const* predicates, size_t numPredicates, int minX, int maxX, int minY, int maxY, int minZ, int maxZ) {
     u128 idx = begin;
     u128 x0, y0, z0;
     CoordFromIndex3<u128>(idx, &y0, &z0, &x0, minY, maxY, minZ, maxZ, minX, maxX);
     for (int y = y0; y <= maxY && idx < end ; y++) {
         for (int z = z0; z <= maxZ && idx < end; z++) {
             for (int x = x0; x <= maxX && idx < end; x++, idx++) {
-                if (SatisfiesPredicates(x, y, z, direction, predicates, numPredicates)) {
+                if (SatisfiesPredicates(x, y, z, predicates, numPredicates)) {
                     lock_guard<mutex> l(coutMutex);
                     cout << "[" << x << ", " << y << ", " << z << "]" << endl;
                 }
@@ -222,8 +340,9 @@ int main(int argc, char *argv[]) {
     int maxZ = INT_MIN;
     int facing = -1;
     int direction = DIRECTION_Y;
-    vector<int> predicate;
-    while ((opt = getopt(argc, argv, "d:r:f:x:X:y:Y:z:Z:")) != -1) {
+    vector<int> simplePredicate;
+    vector<Predicate> predicate;
+    while ((opt = getopt(argc, argv, "d:r:f:x:X:y:Y:z:Z:p:")) != -1) {
         switch (opt) {
             case 'd': {
                 string d = optarg;
@@ -254,13 +373,13 @@ int main(int argc, char *argv[]) {
                 break;
             }
             case 'r': {
-                vector<string> tokens = Split(optarg, ',');
-                for_each(tokens.begin(), tokens.end(), [&predicate](string const& s) {
+                vector<string> tokens = strings::Split(optarg, ',');
+                for_each(tokens.begin(), tokens.end(), [&simplePredicate](string const& s) {
                     int v = -1;
                     if (sscanf(s.c_str(), "%d", &v) != 1) {
                         PrintHelpAndExit("invlaid integer string");
                     }
-                    predicate.push_back(v);
+                    simplePredicate.push_back(v);
                 });
                 break;
             }
@@ -294,8 +413,52 @@ int main(int argc, char *argv[]) {
                     PrintHelpAndExit();
                 }
                 break;
+            case 'p': {
+                vector<string> tokens = strings::Split(optarg, '}');
+                for_each(tokens.begin(), tokens.end(), [&predicate](string const& s) {
+                    Predicate p = Predicate::FromJSON(strings::LTrim(s + "}", ","));
+                    predicate.push_back(p);
+                });
+                break;
+            }
         }
     }
+    
+    if (!simplePredicate.empty()) {
+        if (!predicate.empty()) {
+            throw runtime_error("both of -r and -p option are set");
+        }
+        int dx = 0;
+        int dy = 0;
+        int dz = 0;
+        switch (direction) {
+            case DIRECTION_X:
+                dx = 1;
+                break;
+            case DIRECTION_Y:
+                dy = 1;
+                break;
+            case DIRECTION_Z:
+                dz = 1;
+                break;
+        }
+        int x = 0;
+        int y = 0;
+        int z = 0;
+        for (int i = 0; i < simplePredicate.size(); i++) {
+            int r = simplePredicate[i];
+            Predicate p;
+            p.dx = x;
+            p.dy = y;
+            p.dz = z;
+            p.rotation = r;
+            predicate.push_back(p);
+            x += dx;
+            y += dy;
+            z += dz;
+        }
+    }
+    
     if (predicate.empty()) {
         PrintHelpAndExit("predicate is empty");
     }
@@ -315,7 +478,7 @@ int main(int argc, char *argv[]) {
             offset = 3;
         }
         for (int i = 0; i < predicate.size(); i++) {
-            predicate[i] = (predicate[i] + offset) % 4;
+            predicate[i].rotation = (predicate[i].rotation + offset) % 4;
         }
     }
     u128 const volume = u128(maxX - minX + 1) * u128(maxY - minY + 1) * u128(maxZ - minZ + 1);
